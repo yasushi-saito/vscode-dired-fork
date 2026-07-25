@@ -187,6 +187,7 @@
     "@types/glob": "^8.0.0",
     "@types/mocha": "^10.0.1",
     "@types/node": "^18.11.17",
+    "@types/path-browserify": "^1.0.3",
     "@types/vscode": "^1.65.0",
     "@typescript-eslint/eslint-plugin": "^5.47.0",
     "@typescript-eslint/parser": "^5.47.0",
@@ -198,8 +199,7 @@
     "vsce": "^2.15.0"
   },
   "dependencies": {
-    "mkdirp": "^1.0.4",
-    "stat-mode": "^1.0.0"
+    "path-browserify": "^1.0.1"
   },
   "preview": true
 }

@@ -1,13 +1,9 @@
 'use strict';
 
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
+export const DIRED_SCHEME = 'dired';
 
-var Mode = require('stat-mode');
-import DiredProvider from './provider';
-import { IDResolver } from './idResolver';
-import { URL, pathToFileURL } from 'url';
+import * as vscode from 'vscode';
+import * as path from 'path-browserify';
 
 export enum SortOrder {
     Alphabetical,
@@ -21,11 +17,9 @@ export default class FileItem {
     constructor(
         private _dirname: string,
         private _filename: string,
-        public stat: fs.Stats | null, // Make stat public and nullable
+        public stat: vscode.FileStat | null, // Use vscode.FileStat
         private _isDirectory: boolean = false,
         private _isFile: boolean = true,
-        private _username: string | undefined = undefined,
-        private _groupname: string | undefined = undefined,
         private _size: number = 0,
         private _month: number = 0,
         private _day: number = 0,
@@ -35,46 +29,77 @@ export default class FileItem {
         private _year: number = 1970,
         private _selected: boolean = false) {}
 
-    static _resolver = new IDResolver();
+    public static create(dir: string, filename: string, stat: vscode.FileStat) {
+        const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
+        const isFile = (stat.type & vscode.FileType.File) !== 0;
+        const mtime = new Date(stat.mtime);
 
-    public static create(dir: string, filename: string, stats: fs.Stats) {
-        const mode = new Mode(stats);
+        let modeStr = isDirectory ? "drwxr-xr-x" : "-rw-r--r--";
+        if ('mode' in stat) {
+            modeStr = FileItem.statsToModeString(stat);
+        }
+
+        const uid = ('uid' in stat) ? (stat as any).uid : 0;
+        const gid = ('gid' in stat) ? (stat as any).gid : 0;
+
         return new FileItem(
             dir,
             filename,
-            stats, // Pass stats to constructor
-            mode.isDirectory(),
-            mode.isFile(),
-            FileItem._resolver.username(stats.uid),
-            FileItem._resolver.groupname(stats.gid),
-            stats.size,
-            stats.mtime.getMonth()+1,
-            stats.mtime.getDate(),
-            stats.mtime.getHours(),
-            stats.mtime.getMinutes(),
-            mode.toString(),
-            stats.mtime.getFullYear(),
+            stat,
+            isDirectory,
+            isFile,
+            stat.size,
+            mtime.getMonth()+1,
+            mtime.getDate(),
+            mtime.getHours(),
+            mtime.getMinutes(),
+            modeStr,
+            mtime.getFullYear(),
             false);
     }
 
-    select(value : boolean) {
-        this._selected = value;
+    private static statsToModeString(stats: any): string {
+        const isDir = typeof stats.isDirectory === 'function' ? stats.isDirectory() : ((stats.type & vscode.FileType.Directory) !== 0);
+        const mode = stats.mode;
+        if (typeof mode !== 'number') {
+            return isDir ? 'drwxr-xr-x' : '-rw-r--r--';
+        }
+        let res = isDir ? 'd' : '-';
+        res += (mode & 0o400) ? 'r' : '-';
+        res += (mode & 0o200) ? 'w' : '-';
+        res += (mode & 0o100) ? 'x' : '-';
+        res += (mode & 0o040) ? 'r' : '-';
+        res += (mode & 0o020) ? 'w' : '-';
+        res += (mode & 0o010) ? 'x' : '-';
+        res += (mode & 0o004) ? 'r' : '-';
+        res += (mode & 0o002) ? 'w' : '-';
+        res += (mode & 0o001) ? 'x' : '-';
+        return res;
     }
 
-    get isSelected(): boolean {
-        return this._selected;
+    get uri(): vscode.Uri | null {
+        if (path.isAbsolute(this._dirname)) {
+            if (this._isDirectory) {
+                return vscode.Uri.file(this.path).with({ scheme: DIRED_SCHEME });
+            }
+            return vscode.Uri.file(this.path);
+        }
+        return null;
     }
 
     get path(): string {
         return path.join(this._dirname, this._filename);
     }
+
+    get dirname(): string {
+        return this._dirname;
+    }
+
     get fileName(): string {
         return this._filename;
     }
 
     public line(): string {
-        const u = (this._username + "        ").substring(0, 8);
-        const g = (this._groupname + "        ").substring(0, 8);
         const size = this.pad(this._size, 8, " ");
         const month = this.pad(this._month, 2, "0");
         const day = this.pad(this._day, 2, "0");
@@ -85,71 +110,89 @@ export default class FileItem {
             se = "*";
         }
         const currentYear = (new Date()).getFullYear();
-if (this._year !== currentYear) {
-    return `${se} ${this._modeStr} ${u} ${g} ${size} ${month} ${day} ${' ' + this._year} ${this._filename}`;
-} else {
-    return `${se} ${this._modeStr} ${u} ${g} ${size} ${month} ${day} ${hour}:${min} ${this._filename}`;
-}
+        if (this._year !== currentYear) {
+            return `${se} ${this._modeStr} ${size} ${month} ${day} ${' ' + this._year} ${this._filename}`;
+        } else {
+            return `${se} ${this._modeStr} ${size} ${month} ${day} ${hour}:${min} ${this._filename}`;
+        }
     }
 
     public static parseLine(dir: string, line: string): FileItem {
-        if (line.length < 52) {
+        if (line.length < 34) {
             throw new Error("Line is too short to parse as a FileItem");
         }
-        const filename = line.substring(52);
-        const username = line.substring(13, 13 + 8).trim();
-        const groupname = line.substring(22, 22 + 8).trim();
-        const sizeStr = line.substring(31, 31 + 8).trim();
+        const filename = line.substring(34);
+        const sizeStr = line.substring(13, 13 + 8).trim();
         const size = parseInt(sizeStr);
-        const monthStr = line.substring(40, 40 + 2);
+        const monthStr = line.substring(22, 22 + 2);
         const month = parseInt(monthStr);
-        const dayStr = line.substring(43, 43 + 2);
+        const dayStr = line.substring(25, 25 + 2);
         const day = parseInt(dayStr);
-        const hourStr = line.substring(46, 46 + 2);
+        const hourStr = line.substring(28, 28 + 2);
         const hour = parseInt(hourStr);
-        const minStr = line.substring(49, 49 + 2);
+        const minStr = line.substring(31, 31 + 2);
         const min = parseInt(minStr);
-        const modeStr = line.substring(2, 2 + 10);
-        const isDirectory = (modeStr.substring(0, 1) === "d");
-        const isFile = (modeStr.substring(0, 1) === "-");
-        const isSelected = (line.substring(0, 1) === "*");
 
-        if (isNaN(size) || isNaN(month) || isNaN(day) || isNaN(hour) || isNaN(min)) {
-            throw new Error(`Failed to parse numeric values from line: ${line}`);
+        const isDirectory = line.substring(2, 3) === "d";
+        const isFile = line.substring(2, 3) === "-";
+        const modeStr = line.substring(2, 12);
+
+        // We don't have year in the parsed line if it is current year,
+        // but if it has ':' it is current year, otherwise it is year.
+        let year = (new Date()).getFullYear();
+        const timeOrYear = line.substring(46, 51);
+        if (!timeOrYear.includes(":")) {
+            year = parseInt(timeOrYear.trim());
         }
 
         return new FileItem(
             dir,
             filename,
-            null, // stat is not available here
+            null, // We don't have stat when parsing line
             isDirectory,
             isFile,
-            username || undefined,
-            groupname || undefined,
             size,
             month,
             day,
             hour,
             min,
             modeStr,
-            1970,
-            isSelected);
+            year,
+            line.substring(0, 1) === "*"
+        );
     }
 
-    public get uri(): vscode.Uri | undefined {
-        const p = path.join(this._dirname, this._filename);
-        if (this._isDirectory) {
-            return vscode.Uri.parse(`${DiredProvider.scheme}://${p}`);
-        } else if (this._isFile) {
-            const u = pathToFileURL(p);
-            return vscode.Uri.parse(u.href);
-        }
-        return undefined;
-    }
-
-    pad(num:number, size:number, p: string): string {
-        var s = num+"";
-        while (s.length < size) s = p + s;
+    private pad(num: number, size: number, char: string): string {
+        let s = num + "";
+        while (s.length < size) s = char + s;
         return s;
+    }
+
+    get isDirectory(): boolean {
+        return this._isDirectory;
+    }
+
+    get isFile(): boolean {
+        return this._isFile;
+    }
+
+    get selected(): boolean {
+        return this._selected;
+    }
+
+    set selected(val: boolean) {
+        this._selected = val;
+    }
+
+    get isSelected(): boolean {
+        return this._selected;
+    }
+
+    select(val: boolean) {
+        this._selected = val;
+    }
+
+    toggleSelect() {
+        this._selected = !this._selected;
     }
 }

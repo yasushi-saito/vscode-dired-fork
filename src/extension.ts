@@ -4,8 +4,7 @@ import * as vscode from 'vscode';
 import DiredProvider from './provider';
 import FileItem from './fileItem';
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as path from 'path-browserify';
 import { autocompletedInputBox, getCurrentQuickPick, removePathLevel } from './autocompletedInputBox';
 
 export interface ExtensionInternal {
@@ -32,90 +31,90 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
         vscode.workspace.registerTextDocumentContentProvider(DiredProvider.scheme, provider),
     );
 
-    // Add completionType argument
-    function* pathCompletionFunc(filePathOrDirPath: string, completionType: 'all' | 'directory' | 'file' = 'all'): IterableIterator<vscode.QuickPickItem> {
+    // Add completionType argument and make it async returning Promise
+    async function pathCompletionFunc(filePathOrDirPath: string, completionType: 'all' | 'directory' | 'file' = 'all'): Promise<vscode.QuickPickItem[]> {
+        const items: vscode.QuickPickItem[] = [];
         let dirname: string;
-        const baseDir = provider.dirname || vscode.workspace.rootPath || require('os').homedir();
-        if (!baseDir) return;
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        const baseDir = provider.dirname || (workspaceFolder ? workspaceFolder.uri.fsPath : '/');
 
         if (!path.isAbsolute(filePathOrDirPath)) {
             filePathOrDirPath = path.join(baseDir, filePathOrDirPath);
         }
 
+        const uri = vscode.Uri.file(filePathOrDirPath);
+
         try {
-            let stat = fs.statSync(filePathOrDirPath);
-            if (stat.isDirectory()) {
+            const stat = await vscode.workspace.fs.stat(uri);
+            const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
+            if (isDirectory) {
                 dirname = filePathOrDirPath;
                 // Yield directory if type is 'all' or 'directory'
                 if (completionType === 'all' || completionType === 'directory') {
-                    yield {
+                    items.push({
                         detail: "Target directory: " + path.basename(filePathOrDirPath) + "/",
                         label: filePathOrDirPath,
                         buttons: [ { iconPath: vscode.ThemeIcon.Folder } ]
-                    };
+                    });
                 }
             } else {
                 // Yield file only if type is 'all' or 'file'
                 if (completionType === 'all' || completionType === 'file') {
-                    yield {
+                    items.push({
                         detail: "Target file: " + path.basename(filePathOrDirPath),
                         label: filePathOrDirPath,
                         buttons: [ { iconPath: vscode.ThemeIcon.File } ]
-                    };
+                    });
                 }
                 dirname = path.dirname(filePathOrDirPath);
             }
         } catch {
             // Yield "Create/Rename to" suggestion only if type is 'all' or 'file'
             if (completionType === 'all' || completionType === 'file') {
-                yield {
+                items.push({
                     detail: "Create/Rename to: " + path.basename(filePathOrDirPath),
                     label: filePathOrDirPath,
                     buttons: [ { iconPath: vscode.ThemeIcon.File } ] // Keep as file icon for creation
-                };
+                });
             }
             dirname = path.dirname(filePathOrDirPath);
             try {
-                fs.accessSync(dirname, fs.constants.F_OK);
+                await vscode.workspace.fs.stat(vscode.Uri.file(dirname));
             } catch {
-                return;
+                return items;
             }
         }        try {
+            const dirUri = vscode.Uri.file(dirname);
+            const entries = await vscode.workspace.fs.readDirectory(dirUri);
             const dirItems: vscode.QuickPickItem[] = [];
             const fileItems: vscode.QuickPickItem[] = [];
-            
-            for (let name of fs.readdirSync(dirname)) {
+
+            for (const [name, type] of entries) {
                 const fullpath = path.join(dirname, name);
-                try {
-                    const stat = fs.statSync(fullpath); // Get stat to check type
-                    if (stat.isDirectory()) {
-                        // Add directory if type is 'all' or 'directory'
-                        if (completionType === 'all' || completionType === 'directory') {
-                            dirItems.push({
-                                label: fullpath, detail: "Open " + name + "/",
-                                buttons: [ { iconPath: vscode.ThemeIcon.Folder } ]
-                            });
-                        }
-                    } else {
-                        // Add file only if type is 'all' or 'file'
-                        if (completionType === 'all' || completionType === 'file') {
-                            fileItems.push({
-                                label: fullpath, detail: "Open " + name,
-                                buttons: [ { iconPath: vscode.ThemeIcon.File } ]
-                            });
-                        }
+                if ((type & vscode.FileType.Directory) !== 0) {
+                    // Add directory if type is 'all' or 'directory'
+                    if (completionType === 'all' || completionType === 'directory') {
+                        dirItems.push({
+                            label: fullpath, detail: "Open " + name + "/",
+                            buttons: [ { iconPath: vscode.ThemeIcon.Folder } ]
+                        });
                     }
-                } catch (statErr) {
-                    // Ignore files we can't stat
+                } else {
+                    // Add file only if type is 'all' or 'file'
+                    if (completionType === 'all' || completionType === 'file') {
+                        fileItems.push({
+                            label: fullpath, detail: "Open " + name,
+                            buttons: [ { iconPath: vscode.ThemeIcon.File } ]
+                        });
+                    }
                 }
             }
-            
-            // Yield directories first, then files
-            for (const item of dirItems) yield item;
-            for (const item of fileItems) yield item;
+
+            return items.concat(dirItems).concat(fileItems);
         } catch (readDirErr) {
             // Ignore errors reading directory
         }
+        return items;
     }
 
     const commandOpen = vscode.commands.registerCommand("extension.dired.open", async () => { // Make the command async
@@ -130,7 +129,8 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             }
         }
         if (!initialDir) {
-            initialDir = require('os').homedir();
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            initialDir = workspaceFolder ? workspaceFolder.uri.fsPath : '/';
         }
 
         if (!ask_dir) {
@@ -150,8 +150,8 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                     self.title = "Open Directory or File";
                     self.value = initialDir || '';
                     self.placeholder = "Enter path to open";
-                    // Trigger initial completion
-                    self.items = Array.from(pathCompletionFunc(self.value, 'all'));
+                    // Trigger initial completion asynchronously
+                    pathCompletionFunc(self.value, 'all').then(items => self.items = items);
                 },
             });
         } else {
@@ -168,14 +168,17 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
         }
 
         try {
-            const stat = fs.statSync(selectedPath);
-            if (stat.isDirectory()) {
-                provider.openDir(selectedPath);
-            } else if (stat.isFile()) {
+            const uri = vscode.Uri.file(selectedPath);
+            const stat = await vscode.workspace.fs.stat(uri);
+            const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
+            const isFile = (stat.type & vscode.FileType.File) !== 0;
+            if (isDirectory) {
+                await provider.openDir(selectedPath);
+            } else if (isFile) {
                 const f = new FileItem(selectedPath, "", null, false, true); // Incomplete FileItem just to get URI.
                 const uri = f.uri;
                 if (uri) {
-                    provider.showFile(uri);
+                    await provider.showFile(uri);
                 }
             }
         } catch (err: any) {
@@ -183,7 +186,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
         }
     });
 
-    const commandEnter = vscode.commands.registerCommand("extension.dired.enter", () => {
+    const commandEnter = vscode.commands.registerCommand("extension.dired.enter", async () => {
         provider.enter();
     });
     const commandToggleDotFiles = vscode.commands.registerCommand("extension.dired.toggleDotFiles", () => {
@@ -221,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                         self.title = `Move ${selectedItems.length} items to Directory`;
                         self.value = initialDirValue;
                         self.placeholder = "Enter target directory path";
-                        self.items = Array.from(pathCompletionFunc(self.value, 'directory'));
+                        pathCompletionFunc(self.value, 'directory').then(items => self.items = items);
                     }
                 });
             } else {
@@ -250,7 +253,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                         self.title = "Rename/Move";
                         self.value = initialValue; // Use determined initial value
                         self.placeholder = "Enter new name or path";
-                        self.items = Array.from(pathCompletionFunc(self.value, 'all'));
+                        pathCompletionFunc(self.value, 'all').then(items => self.items = items);
                     }
                 });
             } else {
@@ -284,7 +287,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                         self.title = `Copy ${selectedItems.length} items to Directory`;
                         self.value = initialDirValue;
                         self.placeholder = "Enter target directory path";
-                        self.items = Array.from(pathCompletionFunc(self.value, 'directory'));
+                        pathCompletionFunc(self.value, 'directory').then(items => self.items = items);
                     }
                 });
             } else {
@@ -311,7 +314,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                         self.title = "Copy";
                         self.value = initialValue;
                         self.placeholder = "Enter destination name or path";
-                        self.items = Array.from(pathCompletionFunc(self.value, 'all'));
+                        pathCompletionFunc(self.value, 'all').then(items => self.items = items);
                     }
                 });
             } else {
@@ -342,7 +345,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             const baseName = fileToDelete ? path.basename(fileToDelete) : "this item";
             const confirmation = await vscode.window.showInformationMessage(`Delete ${baseName}?`, { modal: true }, "Yes", "No");
             if (confirmation === "Yes") {
-                provider.delete(); // Use existing single delete method
+                await provider.delete(); // Use existing single delete method
             }
         }
     });
@@ -385,8 +388,8 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
                 completion: completionForCreate,
                 withSelf: (self) => {
                     processSelf(self);
-                    // Trigger initial completion
-                    self.items = Array.from(completionForCreate(self.value));
+                    // Trigger initial completion asynchronously
+                    completionForCreate(self.value).then(items => self.items = items);
                 }
             });
 
@@ -395,14 +398,16 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             vscode.window.showInformationMessage(fileName);
             let isDirectory = false;
 
+            const fileUri = vscode.Uri.file(fileName);
             try {
-                let stat = await fs.promises.stat(fileName);
-                if (stat.isDirectory())
+                let stat = await vscode.workspace.fs.stat(fileUri);
+                if ((stat.type & vscode.FileType.Directory) !== 0)
                     isDirectory = true;
             }
             catch {
-                await fs.promises.mkdir(path.dirname(fileName), { recursive: true })
-                await fs.promises.writeFile(fileName, "");
+                const parentUri = vscode.Uri.file(path.dirname(fileName));
+                await vscode.workspace.fs.createDirectory(parentUri);
+                await vscode.workspace.fs.writeFile(fileUri, new Uint8Array(0));
             }
 
             if (isDirectory) {
