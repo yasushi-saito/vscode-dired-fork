@@ -39,9 +39,6 @@ export default class FileItem {
             modeStr = FileItem.statsToModeString(stat);
         }
 
-        const uid = ('uid' in stat) ? (stat as any).uid : 0;
-        const gid = ('gid' in stat) ? (stat as any).gid : 0;
-
         return new FileItem(
             dir,
             filename,
@@ -140,7 +137,7 @@ export default class FileItem {
         // We don't have year in the parsed line if it is current year,
         // but if it has ':' it is current year, otherwise it is year.
         let year = (new Date()).getFullYear();
-        const timeOrYear = line.substring(46, 51);
+        const timeOrYear = line.substring(28, 33);
         if (!timeOrYear.includes(":")) {
             year = parseInt(timeOrYear.trim());
         }
