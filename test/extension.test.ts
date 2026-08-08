@@ -1,22 +1,44 @@
-//
-// Note: This example test is leveraging the Mocha test framework.
-// Please refer to their documentation on https://mochajs.org/ for help.
-//
+/// <reference types="node" />
 
-// The module 'assert' provides assertion methods from node
 import * as assert from 'assert';
+import { getTargetLineForOpenDir } from '../src/provider';
 
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
-import * as vscode from 'vscode';
-import * as myExtension from '../src/extension';
+export function runTests(): void {
+    const tests: Array<{ name: string; fn: () => void }> = [
+        {
+            name: 'Something 1',
+            fn: () => {
+                assert.equal(-1, [1, 2, 3].indexOf(5));
+                assert.equal(-1, [1, 2, 3].indexOf(0));
+            }
+        },
+        {
+            name: 'uses the initial file row when no saved cursor position exists',
+            fn: () => {
+                const buffers = [
+                    'dir: (Sort: Alphabetical)',
+                    '  -rw-r--r-- 1234 07 07 10:00 foo.txt',
+                    '  -rw-r--r-- 1234 07 07 10:01 bar.txt'
+                ];
 
-// Defines a Mocha test suite to group tests of similar kind together
-suite("Extension Tests", () => {
+                assert.strictEqual(getTargetLineForOpenDir(buffers, 'bar.txt', null, buffers.length), 2);
+            }
+        }
+    ];
 
-    // Defines a Mocha unit test
-    test("Something 1", () => {
-        assert.equal(-1, [1, 2, 3].indexOf(5));
-        assert.equal(-1, [1, 2, 3].indexOf(0));
-    });
-});
+    let failures = 0;
+    for (const test of tests) {
+        try {
+            test.fn();
+            console.log(`✔ ${test.name}`);
+        } catch (error) {
+            failures += 1;
+            console.error(`✖ ${test.name}`);
+            console.error(error);
+        }
+    }
+
+    if (failures > 0) {
+        throw new Error(`${failures} test(s) failed.`);
+    }
+}

@@ -4,9 +4,25 @@ import * as vscode from 'vscode';
 import * as path from 'path-browserify';
 
 import FileItem, { SortOrder, DIRED_SCHEME } from './fileItem';
-import * as autoBox from './autocompletedInputBox'
 
 const FIXED_URI: vscode.Uri = vscode.Uri.parse('dired://fixed_window');
+
+export function getTargetLineForOpenDir(buffers: string[], initialFile: string, savedCursorPosition: number | null, lineCount: number): number {
+    if (typeof savedCursorPosition === "number" && savedCursorPosition > 0 && savedCursorPosition < lineCount) {
+        return savedCursorPosition;
+    }
+
+    if (initialFile) {
+        const normalizedInitialFile = initialFile.trim();
+        for (let i = 1; i < buffers.length; i++) {
+            if (buffers[i].includes(normalizedInitialFile)) {
+                return i;
+            }
+        }
+    }
+
+    return 0;
+}
 
 export default class DiredProvider implements vscode.TextDocumentContentProvider {
     // ディレクトリごとのカーソル位置保存用
@@ -191,7 +207,6 @@ export default class DiredProvider implements vscode.TextDocumentContentProvider
 
             try {
                 const sourceUri = vscode.Uri.file(sourcePath);
-                const sourceStats = await vscode.workspace.fs.stat(sourceUri);
                 let finalTargetPath = targetPath;
                 const targetUri = vscode.Uri.file(targetPath);
 
@@ -475,7 +490,10 @@ export default class DiredProvider implements vscode.TextDocumentContentProvider
         this.openDir(p);
     }
 
-    async openDir(path: string) {
+    // Open the directory given by `path`. If `initialFile` is provided, it will
+    // be used to set the initial cursor position. `initialFile` shall not
+    // contain '/'.
+    async openDir(path: string, initialFile: string = "") {
         const f = new FileItem(path, "", null, true); // Incomplete FileItem just to get URI.
         const uri = f.uri;
         if (uri) {
@@ -488,11 +506,8 @@ export default class DiredProvider implements vscode.TextDocumentContentProvider
 
             // カーソル位置復元処理
             const lineCount = doc.lineCount;
-            let targetLine = 0;
             const saved = this._cursorPositions[path];
-            if (typeof saved === "number" && saved > 0 && saved < lineCount) {
-                targetLine = saved;
-            }
+            const targetLine = getTargetLineForOpenDir(this._buffers, initialFile, saved ?? null, lineCount);
             const newSelection = new vscode.Selection(targetLine, 0, targetLine, 0);
             editor.selection = newSelection;
             editor.revealRange(new vscode.Range(targetLine, 0, targetLine, 0));

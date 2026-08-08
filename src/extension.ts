@@ -12,7 +12,6 @@ export interface ExtensionInternal {
 }
 
 export function activate(context: vscode.ExtensionContext): ExtensionInternal {
-    let ask_dir = true;
     const configuration = vscode.workspace.getConfiguration('dired');
 
     const fixedWindow = configuration.get('fixedWindow', false);
@@ -110,6 +109,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
 
     const commandOpen = vscode.commands.registerCommand("extension.dired.open", async () => { // Make the command async
         let initialDir = vscode.workspace.rootPath;
+        let initialFile = "";
         const at = vscode.window.activeTextEditor;
         if (at) {
             if (at.document.uri.scheme === DiredProvider.scheme) {
@@ -117,6 +117,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             } else {
                 const doc = at.document;
                 initialDir = path.dirname(doc.fileName);
+                initialFile = path.basename(doc.fileName);
             }
         }
         if (!initialDir) {
@@ -127,7 +128,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
         const askDir = configuration.get('askDirectory', true); 
         if (!askDir) {
             if (initialDir) {
-                provider.openDir(initialDir);
+                provider.openDir(initialDir, initialFile);
             }
             return; // Exit if not asking for directory
         }
@@ -166,7 +167,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
             const isFile = (stat.type & vscode.FileType.File) !== 0;
             if (isDirectory) {
-                await provider.openDir(selectedPath);
+                await provider.openDir(selectedPath, initialFile);
             } else if (isFile) {
                 const f = new FileItem(selectedPath, "", null, false, true); // Incomplete FileItem just to get URI.
                 const uri = f.uri;
