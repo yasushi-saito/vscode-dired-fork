@@ -14,18 +14,9 @@ export interface ExtensionInternal {
 export function activate(context: vscode.ExtensionContext): ExtensionInternal {
     let ask_dir = true;
     const configuration = vscode.workspace.getConfiguration('dired');
-    if (configuration.has('ask_directory')) {
-        ask_dir = configuration.get('ask_directory', true); // Use get with default
-    }
-    let fixed_window = false;
-    if (configuration.has('fixed_window')) {
-        fixed_window = configuration.get('fixed_window', false); // Use get with default
-    }
-    // Read the new configuration settings
-    const useQuickPickInput = configuration.get('useQuickPickInput', false);
-    const setInitialPathInInput = configuration.get('setInitialPathInInput', true); // Read the new setting
 
-    const provider = new DiredProvider(fixed_window);
+    const fixedWindow = configuration.get('fixedWindow', false);
+    const provider = new DiredProvider(fixedWindow);
 
     const providerRegistrations = vscode.Disposable.from(
         vscode.workspace.registerTextDocumentContentProvider(DiredProvider.scheme, provider),
@@ -133,7 +124,8 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
             initialDir = workspaceFolder ? workspaceFolder.uri.fsPath : '/';
         }
 
-        if (!ask_dir) {
+        const askDir = configuration.get('askDirectory', true); 
+        if (!askDir) {
             if (initialDir) {
                 provider.openDir(initialDir);
             }
@@ -142,6 +134,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionInternal {
 
         let selectedPath: string | undefined;
 
+        const useQuickPickInput = configuration.get('useQuickPickInput', false);
         if (useQuickPickInput) {
             selectedPath = await autocompletedInputBox({
                 // Pass the completion function with the desired type ('all' for now)
